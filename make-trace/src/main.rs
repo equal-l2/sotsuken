@@ -1,5 +1,4 @@
 use serde::Deserialize;
-use websocket::client::sync::Client;
 use websocket::ClientBuilder;
 use websocket::Message;
 use websocket::OwnedMessage;
@@ -9,7 +8,7 @@ use std::sync::Mutex;
 #[macro_use]
 extern crate lazy_static;
 
-#[derive(Clone, Deserialize, Debug)]
+#[derive(Clone, Deserialize, Debug, PartialEq)]
 struct Response {
     result: serde_json::Value,
     id: isize,
@@ -21,19 +20,53 @@ struct Event {
     params: serde_json::Value,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Deserialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct CallFrame {
+    function_name: String,
+    location: Location,
+    scope_chain: Vec<Scope>,
+    url: String,
+}
+
+#[derive(Clone, Deserialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct Location {
+    column_number: usize,
+    line_number: usize,
+    script_id: String,
+}
+
+#[derive(Clone, Deserialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct Scope {
+    name: Option<String>,
+    object: RemoteObject,
+    r#type: String,
+}
+
+#[derive(Clone, Deserialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct RemoteObject {
+    r#type: String,
+    object_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 enum MsgType {
-    Response,
-    PauseEvent,
-    OtherEvent,
+    Response(Response),
+    PauseEvent(Event),
+    OtherEvent(Event),
 }
 
 lazy_static! {
-    static ref LAST_PAUSE: Mutex<Option<Event>> = Mutex::new(None);
+    //static ref LAST_PAUSE: Mutex<Option<Event>> = Mutex::new(None);
     static ref MSG_ID: Mutex<usize> = Mutex::new(0);
 }
 
-fn send_msg(msg: &str, wsclient: &mut Client<std::net::TcpStream>) {
+type Client = websocket::client::sync::Client<std::net::TcpStream>;
+
+fn send_msg(msg: &str, wsclient: &mut Client) {
     let mut id = MSG_ID.lock().unwrap();
     let msg = format!(r#"{{"id": {}, {}}}"#, *id, msg);
     wsclient.send_message(&Message::text(&msg)).unwrap();
@@ -41,7 +74,7 @@ fn send_msg(msg: &str, wsclient: &mut Client<std::net::TcpStream>) {
     println!("Sent : {}", msg);
 }
 
-fn wait_msg(wsclient: &mut Client<std::net::TcpStream>) -> Option<MsgType> {
+fn wait_msg(wsclient: &mut Client) -> Option<MsgType> {
     loop {
         let resp = wsclient.recv_message();
         match resp {
@@ -51,16 +84,18 @@ fn wait_msg(wsclient: &mut Client<std::net::TcpStream>) -> Option<MsgType> {
         let resp = resp.unwrap();
         if let OwnedMessage::Text(i) = resp {
             let v = serde_json::from_str::<Response>(&i);
-            if let Ok(_) = v {
-                println!("Resp: {}", i);
-                return Some(MsgType::Response);
+            if let Ok(e) = v {
+                //println!("Resp: {}", i);
+                println!("Response #{}", e.id);
+                return Some(MsgType::Response(e));
             } else if let Ok(e) = serde_json::from_str::<Event>(&i) {
-                println!("Event: {}", i);
+                //println!("Event: {}", i);
+                println!("Event {}", e.method);
                 if e.method == "Debugger.paused" {
-                    *LAST_PAUSE.lock().unwrap() = Some(e);
-                    return Some(MsgType::PauseEvent);
+                    //*LAST_PAUSE.lock().unwrap() = Some(e);
+                    return Some(MsgType::PauseEvent(e));
                 }
-                return Some(MsgType::OtherEvent);
+                return Some(MsgType::OtherEvent(e));
             }
         } else if let OwnedMessage::Close(_) = resp {
             return None;
@@ -70,15 +105,7 @@ fn wait_msg(wsclient: &mut Client<std::net::TcpStream>) -> Option<MsgType> {
     }
 }
 
-fn main() {
-    // TODO: better message handle
-    let addr = std::env::args().nth(1).unwrap();
-
-    let mut client = ClientBuilder::new(&format!("ws://{}", addr))
-        .unwrap()
-        .connect_insecure()
-        .unwrap();
-
+fn init_debugger(mut c: &mut Client) {
     let init_msgs = [
         r#""method":"Runtime.enable""#,
         r#""method":"Debugger.enable""#,
@@ -86,44 +113,110 @@ fn main() {
     ];
 
     for msg in init_msgs.iter() {
-        send_msg(msg, &mut client);
-        while wait_msg(&mut client).unwrap() != MsgType::Response {}
+        send_msg(msg, &mut c);
+        loop {
+            match wait_msg(&mut c).unwrap() {
+                MsgType::Response(_) => break,
+                _ => {}
+            }
+        }
     }
+}
 
-    //for i in 1..=9 {
-    //    send_msg(
-    //        &format!(
-    //            r#""method":"Debugger.setBreakpointByUrl", "params":{{"lineNumber": {}, "urlRegex": "test.py"}}"#,
-    //            i
-    //        ),
-    //        &mut client,
-    //    );
-    //    while wait_msg(&mut client).unwrap() != MsgType::Response {}
-    //}
+fn set_breakpoint_all(lines: usize, filename: &str, mut c: &mut Client) {
+    for i in 0..lines {
+        send_msg(
+            &format!(
+                r#""method":"Debugger.setBreakpointByUrl", "params":{{"lineNumber": {}, "urlRegex": ".*{}"}}"#,
+                i,
+                filename
+            ),
+            &mut c,
+        );
+        loop {
+            match wait_msg(&mut c).unwrap() {
+                MsgType::Response(_) => break,
+                _ => {}
+            }
+        }
+    }
+}
 
-    // go to test.py
+fn jump_to_file(filename: &str, mut c: &mut Client) -> Event {
+    let mut evn;
     loop {
-        send_msg(r#""method":"Debugger.stepOver""#, &mut client);
-        while wait_msg(&mut client).unwrap() != MsgType::PauseEvent {}
-        let evn = LAST_PAUSE.lock().unwrap().clone().unwrap();
-        if evn.params["callFrames"].as_array().unwrap()[0]["url"]
-            .as_str()
-            .unwrap()
-            .contains("test.py")
+        send_msg(r#""method":"Debugger.stepOver""#, &mut c);
+        loop {
+            match wait_msg(&mut c).unwrap() {
+                MsgType::PauseEvent(e) => {
+                    evn = e;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        if serde_json::from_value::<Vec<CallFrame>>(evn.params["callFrames"].clone()).unwrap()[0]
+            .url
+            .contains(filename)
         {
             break;
         }
     }
+    evn
+}
+
+fn main() {
+    // TODO: better message handling
+    // e.g. use queue for event handling
+
+    let mut c = ClientBuilder::new("ws://127.0.0.1:9229/graal-inspector")
+        .unwrap()
+        .connect_insecure()
+        .unwrap();
+
+    init_debugger(&mut c);
+
+    // FIXME: read file and get line count
+    set_breakpoint_all(14, "test.py", &mut c);
+
+    let mut evn = jump_to_file("test.py", &mut c);
 
     {
         let mut f = std::fs::File::create("trace.txt").unwrap();
         use std::io::Write;
-        write!(f, "{:?}", (*LAST_PAUSE.lock().unwrap()).clone().unwrap());
         'out: loop {
-            send_msg(r#""method":"Debugger.stepOver""#, &mut client);
+            let cf = &serde_json::from_value::<Vec<CallFrame>>(evn.params["callFrames"].clone())
+                .unwrap();
+            println!("cf size: {}", cf.len());
+            let cf0 = &cf[0];
+            for sc in &cf0.scope_chain {
+                send_msg(
+                    &format!(
+                        r#""method":"Runtime.getProperties", params: {{"objectId": {}}}"#,
+                        sc.object.object_id
+                    ),
+                    &mut c,
+                );
+                loop {
+                    match wait_msg(&mut c) {
+                        Some(MsgType::Response(e)) => {
+                            writeln!(f, "{:?} {:?} {:?}", cf0.location, sc.name, e.result).unwrap();
+                            break;
+                        }
+                        Some(_) => {}
+                        None => {
+                            break 'out;
+                        }
+                    }
+                }
+            }
+            writeln!(f).unwrap();
+
+            send_msg(r#""method":"Debugger.stepOver""#, &mut c);
             loop {
-                match wait_msg(&mut client) {
-                    Some(MsgType::PauseEvent) => {
+                match wait_msg(&mut c) {
+                    Some(MsgType::PauseEvent(e)) => {
+                        evn = e;
                         break;
                     }
                     Some(_) => {}
@@ -132,7 +225,6 @@ fn main() {
                     }
                 }
             }
-            writeln!(f, "{:?}", (*LAST_PAUSE.lock().unwrap()).clone().unwrap());
         }
     }
 }
