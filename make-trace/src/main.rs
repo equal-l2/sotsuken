@@ -1,23 +1,25 @@
-use serde::Deserialize;
-use websocket::ClientBuilder;
-use websocket::Message;
-use websocket::OwnedMessage;
-
-use std::sync::Mutex;
-
 #[macro_use]
 extern crate lazy_static;
 
+use serde::Deserialize;
+use serde_json::Value;
+
 #[derive(Clone, Deserialize, Debug, PartialEq)]
 struct Response {
-    result: serde_json::Value,
+    result: Value,
     id: isize,
 }
 
 #[derive(Clone, Deserialize, Debug, PartialEq)]
 struct Event {
     method: String,
-    params: serde_json::Value,
+    params: Value,
+}
+
+impl Event {
+    fn try_get_callframes(&self) -> Option<Vec<CallFrame>> {
+        serde_json::from_value::<Vec<CallFrame>>(self.params["callFrames"].clone()).ok()
+    }
 }
 
 #[derive(Clone, Deserialize, Debug, PartialEq)]
@@ -60,8 +62,7 @@ enum MsgType {
 }
 
 lazy_static! {
-    //static ref LAST_PAUSE: Mutex<Option<Event>> = Mutex::new(None);
-    static ref MSG_ID: Mutex<usize> = Mutex::new(0);
+    static ref MSG_ID: std::sync::Mutex<usize> = std::sync::Mutex::new(0);
 }
 
 type Client = websocket::client::sync::Client<std::net::TcpStream>;
@@ -69,12 +70,15 @@ type Client = websocket::client::sync::Client<std::net::TcpStream>;
 fn send_msg(msg: &str, wsclient: &mut Client) {
     let mut id = MSG_ID.lock().unwrap();
     let msg = format!(r#"{{"id": {}, {}}}"#, *id, msg);
-    wsclient.send_message(&Message::text(&msg)).unwrap();
+    wsclient
+        .send_message(&websocket::Message::text(&msg))
+        .unwrap();
     *id += 1;
     println!("Sent : {}", msg);
 }
 
 fn wait_msg(wsclient: &mut Client) -> Option<MsgType> {
+    use websocket::OwnedMessage;
     loop {
         let resp = wsclient.recv_message();
         match resp {
@@ -128,8 +132,7 @@ fn set_breakpoint_all(lines: usize, filename: &str, mut c: &mut Client) {
         send_msg(
             &format!(
                 r#""method":"Debugger.setBreakpointByUrl", "params":{{"lineNumber": {}, "urlRegex": ".*{}"}}"#,
-                i,
-                filename
+                i, filename
             ),
             &mut c,
         );
@@ -143,8 +146,8 @@ fn set_breakpoint_all(lines: usize, filename: &str, mut c: &mut Client) {
 }
 
 fn jump_to_file(filename: &str, mut c: &mut Client) -> Event {
-    let mut evn;
     loop {
+        let evn;
         send_msg(r#""method":"Debugger.stepOver""#, &mut c);
         loop {
             match wait_msg(&mut c).unwrap() {
@@ -155,21 +158,19 @@ fn jump_to_file(filename: &str, mut c: &mut Client) -> Event {
                 _ => {}
             }
         }
-        if serde_json::from_value::<Vec<CallFrame>>(evn.params["callFrames"].clone()).unwrap()[0]
-            .url
-            .contains(filename)
-        {
-            break;
+        if evn.try_get_callframes().unwrap()[0].url.contains(filename) {
+            return evn;
         }
     }
-    evn
 }
 
 fn main() {
     // TODO: better message handling
     // e.g. use queue for event handling
 
-    let mut c = ClientBuilder::new("ws://127.0.0.1:9229/graal-inspector")
+    let addr = "ws://127.0.0.1:9229/graal-inspector";
+
+    let mut c = websocket::ClientBuilder::new(addr)
         .unwrap()
         .connect_insecure()
         .unwrap();
@@ -185,8 +186,7 @@ fn main() {
         let mut f = std::fs::File::create("trace.txt").unwrap();
         use std::io::Write;
         'out: loop {
-            let cf = &serde_json::from_value::<Vec<CallFrame>>(evn.params["callFrames"].clone())
-                .unwrap();
+            let cf = evn.try_get_callframes().unwrap();
             println!("cf size: {}", cf.len());
             let cf0 = &cf[0];
             for sc in &cf0.scope_chain {
