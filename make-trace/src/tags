@@ -1,0 +1,49 @@
+!_TAG_FILE_FORMAT	2	/extended format; --format=1 will not append ;" to lines/
+!_TAG_FILE_SORTED	1	/0=unsorted, 1=sorted, 2=foldcase/
+!_TAG_OUTPUT_FILESEP	slash	/slash or backslash/
+!_TAG_OUTPUT_MODE	u-ctags	/u-ctags or e-ctags/
+!_TAG_PROGRAM_AUTHOR	Universal Ctags Team	//
+!_TAG_PROGRAM_NAME	Universal Ctags	/Derived from Exuberant Ctags/
+!_TAG_PROGRAM_URL	https://ctags.io/	/official site/
+!_TAG_PROGRAM_VERSION	0.0.0	/f7513be0/
+CallFrame	types.rs	/^pub struct CallFrame {$/;"	s
+Client	main.rs	/^type Client = websocket::client::sync::Client<std::net::TcpStream>;$/;"	t
+Event	types.rs	/^impl Event {$/;"	c
+Event	types.rs	/^pub struct Event {$/;"	s
+Location	types.rs	/^pub struct Location {$/;"	s
+MsgType	types.rs	/^enum MsgType {$/;"	g
+OtherEvent	types.rs	/^    OtherEvent(Event),$/;"	e	enum:MsgType
+PauseEvent	types.rs	/^    PauseEvent(Event),$/;"	e	enum:MsgType
+PropertyDescriptor	types.rs	/^pub struct PropertyDescriptor {$/;"	s
+RemoteObject	types.rs	/^pub struct RemoteObject {$/;"	s
+Response	types.rs	/^    Response(Response),$/;"	e	enum:MsgType
+Response	types.rs	/^pub struct Response {$/;"	s
+Scope	types.rs	/^pub struct Scope {$/;"	s
+call_frame_id	types.rs	/^    call_frame_id: String,$/;"	m	struct:CallFrame
+column_number	types.rs	/^    column_number: usize,$/;"	m	struct:Location
+function_name	types.rs	/^    function_name: String,$/;"	m	struct:CallFrame
+id	types.rs	/^    id: isize,$/;"	m	struct:Response
+init_debugger	main.rs	/^fn init_debugger(mut c: &mut Client) {$/;"	f
+jump_to_file	main.rs	/^fn jump_to_file(filename: &str, mut c: &mut Client) -> Event {$/;"	f
+line_number	types.rs	/^    line_number: usize,$/;"	m	struct:Location
+location	types.rs	/^    location: Location,$/;"	m	struct:CallFrame
+main	main.rs	/^fn main() {$/;"	f
+method	types.rs	/^    method: String,$/;"	m	struct:Event
+name	types.rs	/^    name: Option<String>,$/;"	m	struct:Scope
+name	types.rs	/^    name: String,$/;"	m	struct:PropertyDescriptor
+object	types.rs	/^    object: RemoteObject,$/;"	m	struct:Scope
+object_id	types.rs	/^    object_id: Option<String>,$/;"	m	struct:RemoteObject
+params	types.rs	/^    params: Value,$/;"	m	struct:Event
+result	types.rs	/^    result: Value,$/;"	m	struct:Response
+scope_chain	types.rs	/^    scope_chain: Vec<Scope>,$/;"	m	struct:CallFrame
+script_id	types.rs	/^    script_id: String,$/;"	m	struct:Location
+send_msg	main.rs	/^fn send_msg(msg: &str, wsclient: &mut Client) {$/;"	f
+set_breakpoint_all	main.rs	/^fn set_breakpoint_all(lines: usize, filename: &str, mut c: &mut Client) {$/;"	f
+try_get_callframes	types.rs	/^    fn try_get_callframes(&self) -> Option<Vec<CallFrame>> {$/;"	P	implementation:Event
+type	types.rs	/^    r#type: String,$/;"	m	struct:RemoteObject
+type	types.rs	/^    r#type: String,$/;"	m	struct:Scope
+types	main.rs	/^mod types;$/;"	n
+url	types.rs	/^    url: String,$/;"	m	struct:CallFrame
+value	types.rs	/^    value: Option<RemoteObject>$/;"	m	struct:PropertyDescriptor
+value	types.rs	/^    value: Option<Value>$/;"	m	struct:RemoteObject
+wait_msg	main.rs	/^fn wait_msg(wsclient: &mut Client) -> Option<MsgType> {$/;"	f

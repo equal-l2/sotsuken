@@ -1,0 +1,7 @@
+main {
+    display: flex;
+}
+
+.selected {
+    background: #30ffff;
+}

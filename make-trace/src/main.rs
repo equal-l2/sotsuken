@@ -2,63 +2,28 @@
 extern crate lazy_static;
 
 use serde::Deserialize;
-use serde_json::Value;
+use serde::Serialize;
 
-#[derive(Clone, Deserialize, Debug, PartialEq)]
-struct Response {
-    result: Value,
-    id: isize,
-}
-
-#[derive(Clone, Deserialize, Debug, PartialEq)]
-struct Event {
-    method: String,
-    params: Value,
-}
-
-impl Event {
-    fn try_get_callframes(&self) -> Option<Vec<CallFrame>> {
-        serde_json::from_value::<Vec<CallFrame>>(self.params["callFrames"].clone()).ok()
-    }
-}
-
-#[derive(Clone, Deserialize, Debug, PartialEq)]
-#[serde(rename_all = "camelCase")]
-struct CallFrame {
-    function_name: String,
-    location: Location,
-    scope_chain: Vec<Scope>,
-    url: String,
-}
-
-#[derive(Clone, Deserialize, Debug, PartialEq)]
-#[serde(rename_all = "camelCase")]
-struct Location {
-    column_number: usize,
-    line_number: usize,
-    script_id: String,
-}
-
-#[derive(Clone, Deserialize, Debug, PartialEq)]
-#[serde(rename_all = "camelCase")]
-struct Scope {
-    name: Option<String>,
-    object: RemoteObject,
-    r#type: String,
-}
-
-#[derive(Clone, Deserialize, Debug, PartialEq)]
-#[serde(rename_all = "camelCase")]
-struct RemoteObject {
-    r#type: String,
-    object_id: String,
-}
+mod chrome_dev_types;
+use chrome_dev_types::*;
 
 #[derive(Clone, Debug, PartialEq)]
-enum MsgType {
+pub enum MsgType {
     Response(Response),
     PauseEvent(Event),
     OtherEvent(Event),
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+struct Step {
+    loc: Location,
+    vars: std::collections::BTreeMap<String, Vec<PropertyDescriptor>>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+struct Trace {
+    src: Vec<String>,
+    steps: Vec<Step>
 }
 
 lazy_static! {
@@ -96,7 +61,6 @@ fn wait_msg(wsclient: &mut Client) -> Option<MsgType> {
                 //println!("Event: {}", i);
                 println!("Event {}", e.method);
                 if e.method == "Debugger.paused" {
-                    //*LAST_PAUSE.lock().unwrap() = Some(e);
                     return Some(MsgType::PauseEvent(e));
                 }
                 return Some(MsgType::OtherEvent(e));
@@ -168,49 +132,127 @@ fn main() {
     // TODO: better message handling
     // e.g. use queue for event handling
 
+    let filename = std::env::args().nth(1);
+    if filename.is_none() {
+        eprintln!("Error: file name not provided");
+        std::process::exit(1);
+    }
+    let filename = &filename.unwrap();
+
+    let graal_exec = std::env::var("GRAAL_EXECUTABLE");
+    if graal_exec.is_err() {
+        eprintln!("Error: $GRAAL_EXECUTABLE is not set");
+        std::process::exit(1);
+    }
+    let graal_exec = graal_exec.unwrap();
+
+    let log_stdout = std::fs::File::create("graal.log").unwrap();
+    let log_stderr = log_stdout.try_clone().unwrap();
+    let mut svr = std::process::Command::new(graal_exec)
+        .args(&[
+            "--log.level=ALL",
+            "--inspect.Path=graal-inspector",
+            "--inspect",
+            filename,
+        ])
+        .stdout(log_stdout)
+        .stderr(log_stderr)
+        .spawn()
+        .expect("GRAAL EXECUTION FAILURE");
+
     let addr = "ws://127.0.0.1:9229/graal-inspector";
 
-    let mut c = websocket::ClientBuilder::new(addr)
-        .unwrap()
-        .connect_insecure()
-        .unwrap();
+    let mut c = {
+        let mut res;
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            res = websocket::ClientBuilder::new(addr)
+                .unwrap()
+                .connect_insecure();
+            if res.is_ok() {
+                break;
+            }
+            eprintln!("Warn: connection failed, retrying...");
+        }
+        res.unwrap()
+    };
 
     init_debugger(&mut c);
 
-    // FIXME: read file and get line count
-    set_breakpoint_all(14, "test.py", &mut c);
+    let src = std::fs::read_to_string(filename).unwrap().lines().map(str::to_owned).collect::<Vec<_>>();
+    set_breakpoint_all(src.len(), filename, &mut c);
 
     let mut evn = jump_to_file("test.py", &mut c);
 
     {
+        let mut trace = Trace {src: src, steps: Default::default()};
         let mut f = std::fs::File::create("trace.txt").unwrap();
         use std::io::Write;
         'out: loop {
-            let cf = evn.try_get_callframes().unwrap();
-            println!("cf size: {}", cf.len());
-            let cf0 = &cf[0];
-            for sc in &cf0.scope_chain {
-                send_msg(
-                    &format!(
-                        r#""method":"Runtime.getProperties", params: {{"objectId": {}}}"#,
-                        sc.object.object_id
-                    ),
-                    &mut c,
-                );
-                loop {
-                    match wait_msg(&mut c) {
-                        Some(MsgType::Response(e)) => {
-                            writeln!(f, "{:?} {:?} {:?}", cf0.location, sc.name, e.result).unwrap();
-                            break;
+            let cfs = evn.try_get_callframes().unwrap();
+            let loc = cfs[0].location.clone();
+            let mut step = Step {loc: loc, vars: Default::default()};
+            //println!("cf size: {}", cfs.len());
+            for cf in cfs {
+                for sc in cf.scope_chain {
+                    if let Some(ref i) = sc.name {
+                        let exc = ["builtins", "__main__", "<module"];
+                        if exc.iter().any(|s| i.starts_with(s)) {
+                            continue;
                         }
-                        Some(_) => {}
-                        None => {
-                            break 'out;
+                    }
+                    send_msg(
+                        &format!(
+                            r#""method":"Runtime.getProperties", params: {{"objectId": {}}}"#,
+                            sc.object.object_id.unwrap()
+                        ),
+                        &mut c,
+                    );
+                    loop {
+                        match wait_msg(&mut c) {
+                            Some(MsgType::Response(e)) => {
+                                //let cf_id = cf
+                                //    .call_frame_id
+                                //    .parse::<isize>()
+                                //    .expect("callframeid isnt num");
+                                //FIXME: wait until __main__ appears (to exclude function
+                                // definitions)
+                                let sc_name = sc.name.unwrap();
+                                if !step.vars.contains_key(&sc_name) {
+                                    let var_array: Vec<PropertyDescriptor> =
+                                        serde_json::from_value::<Vec<PropertyDescriptor>>(e.result["result"].clone()).unwrap().into_iter().filter(|pd| {
+                                            if let Some(ref i) = pd.value {
+                                                !(i.r#type == "function") && !(pd.name.starts_with("__"))
+                                            } else {
+                                                false
+                                            }
+                                        }).collect();
+                                    step.vars.insert(sc_name, var_array);
+                                }
+                                //writeln!(f, "{} {:?} {}", cf_id, cf.location, sc_name).unwrap();
+                                //for v in var_array {
+                                //    if let Some(ref i) = v.value {
+                                //        if i.r#type == "function" {
+                                //            continue;
+                                //        }
+                                //        if v.name.starts_with("__") {
+                                //            continue;
+                                //        }
+                                //        writeln!(f, "\t{:?}", v).unwrap();
+                                //    }
+                                //}
+                                break;
+                            }
+                            Some(_) => {}
+                            None => {
+                                break 'out;
+                            }
                         }
                     }
                 }
             }
-            writeln!(f).unwrap();
+            trace.steps.push(step);
+            //writeln!(f).unwrap();
 
             send_msg(r#""method":"Debugger.stepOver""#, &mut c);
             loop {
@@ -226,5 +268,7 @@ fn main() {
                 }
             }
         }
+        writeln!(f, "{}", serde_json::to_string(&trace).unwrap());
     }
+    let _ = svr.kill();
 }

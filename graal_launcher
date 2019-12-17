@@ -1,1 +1,0 @@
-$GRAAL_EXECUTABLE --log.level=ALL --inspect.Path="graal-inspector" --inspect $@
