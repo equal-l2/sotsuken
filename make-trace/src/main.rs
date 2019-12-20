@@ -46,9 +46,8 @@ fn wait_msg(wsclient: &mut Client) -> Option<MsgType> {
     use websocket::OwnedMessage;
     loop {
         let resp = wsclient.recv_message();
-        match resp {
-            Err(websocket::WebSocketError::NoDataAvailable) => return None,
-            _ => {}
+        if let Err(websocket::WebSocketError::NoDataAvailable) = resp {
+            return None;
         }
         let resp = resp.unwrap();
         if let OwnedMessage::Text(i) = resp {
@@ -83,9 +82,8 @@ fn init_debugger(mut c: &mut Client) {
     for msg in init_msgs.iter() {
         send_msg(msg, &mut c);
         loop {
-            match wait_msg(&mut c).unwrap() {
-                MsgType::Response(_) => break,
-                _ => {}
+            if let MsgType::Response(_) = wait_msg(&mut c).unwrap() {
+                break;
             }
         }
     }
@@ -101,9 +99,8 @@ fn set_breakpoint_all(lines: usize, filename: &str, mut c: &mut Client) {
             &mut c,
         );
         loop {
-            match wait_msg(&mut c).unwrap() {
-                MsgType::Response(_) => break,
-                _ => {}
+            if let MsgType::Response(_) = wait_msg(&mut c).unwrap() {
+                break;
             }
         }
     }
@@ -114,12 +111,9 @@ fn jump_to_file(filename: &str, mut c: &mut Client) -> Event {
         let evn;
         send_msg(r#""method":"Debugger.stepOver""#, &mut c);
         loop {
-            match wait_msg(&mut c).unwrap() {
-                MsgType::PauseEvent(e) => {
-                    evn = e;
-                    break;
-                }
-                _ => {}
+            if let MsgType::PauseEvent(e) = wait_msg(&mut c).unwrap() {
+                evn = e;
+                break;
             }
         }
         if evn.try_get_callframes().unwrap()[0].url.contains(filename) {
@@ -218,17 +212,17 @@ fn main() {
                                 //FIXME: wait until __main__ appears (to exclude function
                                 // definitions)
                                 let sc_name = sc.name.unwrap();
-                                if !step.vars.contains_key(&sc_name) {
+                                step.vars.entry(sc_name).or_insert_with(|| {
                                     let var_array: Vec<PropertyDescriptor> =
                                         serde_json::from_value::<Vec<PropertyDescriptor>>(e.result["result"].clone()).unwrap().into_iter().filter(|pd| {
                                             if let Some(ref i) = pd.value {
-                                                !(i.r#type == "function") && !(pd.name.starts_with("__"))
+                                                i.r#type != "function" && !pd.name.starts_with("__")
                                             } else {
                                                 false
                                             }
                                         }).collect();
-                                    step.vars.insert(sc_name, var_array);
-                                }
+                                    var_array
+                                });
                                 //writeln!(f, "{} {:?} {}", cf_id, cf.location, sc_name).unwrap();
                                 //for v in var_array {
                                 //    if let Some(ref i) = v.value {
@@ -268,7 +262,7 @@ fn main() {
                 }
             }
         }
-        writeln!(f, "{}", serde_json::to_string(&trace).unwrap());
+        writeln!(f, "{}", serde_json::to_string(&trace).unwrap()).unwrap();
     }
     let _ = svr.kill();
 }
