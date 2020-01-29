@@ -9,7 +9,8 @@
         <div id="app">
             <main>
                 <div id="src-view" style="flex:2">
-                    <ol id="src-cont">
+                    <ol v-if="trace!=null" id="src-cont">
+                        <li v-for="(l,idx) in trace.src" :class="{selected: idx==line}">{{ l }}</li>
                     </ol>
                 </div>
                 <div id="var-view" style="flex:1">
@@ -17,10 +18,10 @@
                     </ul>
                 </div>
             </main>
-            <button @click="prevStep" :disabled="cnt<=0">← prev</button>
-            <span v-if="max_cnt!=0"> {{cnt + 1}}/{{max_cnt}} </span>
-            <span v-if="max_cnt==0"> -/- </span>
-            <button @click="nextStep" :disabled="cnt+1>=max_cnt">next →</button>
+            <button @click="step-=1" :disabled="step<=0">← prev</button>
+            <span v-if="trace!=null"> {{step + 1}}/{{step_max}} </span>
+            <span v-else> -/- </span>
+            <button @click="step+=1" :disabled="step+1>=step_max">next →</button>
             <form>
                 <input type="file" @change="readSrc">
             </form>
