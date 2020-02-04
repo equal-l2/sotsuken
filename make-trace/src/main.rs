@@ -23,7 +23,7 @@ struct Step {
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 struct Trace {
     src: Vec<String>,
-    steps: Vec<Step>
+    steps: Vec<Step>,
 }
 
 lazy_static! {
@@ -122,6 +122,23 @@ fn jump_to_file(filename: &str, mut c: &mut Client) -> Event {
     }
 }
 
+fn runtime_get_properties(id: String, mut c: &mut Client) -> Option<Vec<PropertyDescriptor>> {
+    send_msg(
+        &format!(
+            r#""method":"Runtime.getProperties", params: {{"objectId": {}}}"#,
+            id
+        ),
+        &mut c,
+    );
+    match wait_msg(&mut c) {
+        Some(MsgType::Response(e)) => Some(
+            serde_json::from_value(e.result["result"].clone())
+                .expect("result should be PropertyDescriptor in this context"),
+        ),
+        _ => None,
+    }
+}
+
 fn main() {
     // TODO: better message handling
     // e.g. use queue for event handling
@@ -173,19 +190,29 @@ fn main() {
 
     init_debugger(&mut c);
 
-    let src = std::fs::read_to_string(filename).unwrap().lines().map(str::to_owned).collect::<Vec<_>>();
+    let src = std::fs::read_to_string(filename)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
     set_breakpoint_all(src.len(), filename, &mut c);
 
     let mut evn = jump_to_file("test.py", &mut c);
 
     {
-        let mut trace = Trace {src: src, steps: Default::default()};
+        let mut trace = Trace {
+            src,
+            steps: Default::default(),
+        };
         let mut f = std::fs::File::create("trace.txt").unwrap();
         use std::io::Write;
         'out: loop {
             let cfs = evn.try_get_callframes().unwrap();
             let loc = cfs[0].location.clone();
-            let mut step = Step {loc: loc, vars: Default::default()};
+            let mut step = Step {
+                loc,
+                vars: Default::default(),
+            };
             //println!("cf size: {}", cfs.len());
             for cf in cfs {
                 for sc in cf.scope_chain {
@@ -195,58 +222,27 @@ fn main() {
                             continue;
                         }
                     }
-                    send_msg(
-                        &format!(
-                            r#""method":"Runtime.getProperties", params: {{"objectId": {}}}"#,
-                            sc.object.object_id.unwrap()
-                        ),
-                        &mut c,
-                    );
-                    loop {
-                        match wait_msg(&mut c) {
-                            Some(MsgType::Response(e)) => {
-                                //let cf_id = cf
-                                //    .call_frame_id
-                                //    .parse::<isize>()
-                                //    .expect("callframeid isnt num");
-                                //FIXME: wait until __main__ appears (to exclude function
-                                // definitions)
-                                let sc_name = sc.name.unwrap();
-                                step.vars.entry(sc_name).or_insert_with(|| {
-                                    let var_array: Vec<PropertyDescriptor> =
-                                        serde_json::from_value::<Vec<PropertyDescriptor>>(e.result["result"].clone()).unwrap().into_iter().filter(|pd| {
-                                            if let Some(ref i) = pd.value {
-                                                i.r#type != "function" && !pd.name.starts_with("__")
-                                            } else {
-                                                false
-                                            }
-                                        }).collect();
-                                    var_array
-                                });
-                                //writeln!(f, "{} {:?} {}", cf_id, cf.location, sc_name).unwrap();
-                                //for v in var_array {
-                                //    if let Some(ref i) = v.value {
-                                //        if i.r#type == "function" {
-                                //            continue;
-                                //        }
-                                //        if v.name.starts_with("__") {
-                                //            continue;
-                                //        }
-                                //        writeln!(f, "\t{:?}", v).unwrap();
-                                //    }
-                                //}
-                                break;
-                            }
-                            Some(_) => {}
-                            None => {
-                                break 'out;
-                            }
-                        }
+                    let var_array = runtime_get_properties(sc.object.object_id.unwrap(), &mut c);
+                    if let Some(vs) = var_array {
+                        //FIXME: wait until __main__ appears (to exclude function
+                        // definitions)
+                        step.vars.entry(sc.name.unwrap()).or_insert_with(|| {
+                            vs.into_iter()
+                                .filter(|pd| {
+                                    if let Some(ref i) = pd.value {
+                                        i.r#type != "function" && !pd.name.starts_with("__")
+                                    } else {
+                                        false
+                                    }
+                                })
+                                .collect::<Vec<_>>()
+                        });
+                    } else {
+                        break 'out;
                     }
                 }
             }
             trace.steps.push(step);
-            //writeln!(f).unwrap();
 
             send_msg(r#""method":"Debugger.stepOver""#, &mut c);
             loop {

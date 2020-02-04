@@ -51,11 +51,11 @@ pub struct Scope {
 pub struct RemoteObject {
     pub r#type: String,
     pub object_id: Option<String>,
-    pub value: Option<Value>
+    pub value: Option<Value>,
 }
 
 #[derive(Clone, Deserialize, Serialize, Debug, PartialEq)]
 pub struct PropertyDescriptor {
     pub name: String,
-    pub value: Option<RemoteObject>
+    pub value: Option<RemoteObject>,
 }
