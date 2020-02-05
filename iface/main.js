@@ -1,3 +1,33 @@
+Vue.component('var-list', {
+    props: ['name', 'value'],
+    data: function() {
+        return Array.isArray(this.value) ? {
+            val_array: this.value,
+            val_str: null
+        } : {
+            val_array: null,
+            val_str: this.value
+        }
+    },
+
+    //FIXME: remove "v-else-if"
+    //       "unresolved" and "__*" should have be removed by the backend.
+    template: `
+    <ul>
+        <li v-if="val_str==null">
+        {{name}}
+        <var-list
+            v-for="v in val_array"
+            :name="v.name"
+            :value="v.value"
+            :key="JSON.stringify(name)+':'+JSON.stringify(v)">
+        </var-list>
+        </li>
+        <li v-else-if="!(val_str=='unresolved'||name.startsWith('__'))">{{name}}:{{val_str}}</li>
+    </ul>
+    `,
+})
+
 let app = new Vue({
     el: "#app",
 
@@ -14,29 +44,18 @@ let app = new Vue({
                 return 0;
             }
         },
+        vars: function() {
+            if (this.trace != null) {
+                return this.trace.steps[this.step].vars;
+            } else {
+                return null;
+            }
+        },
         step_max: function() {
             if (this.trace != null) {
                 return this.trace.steps.length;
             } else {
                 return 0;
-            }
-        }
-    },
-
-    updated: function() {
-        let var_cont = document.getElementById("var-cont");
-
-        var_cont.innerHTML = "";
-        for ([k, v] of Object.entries(app.trace.steps[app.step].vars)) {
-            let li = document.createElement("li");
-            let ul_nest = document.createElement("ul");
-            var_cont.appendChild(li);
-            li.appendChild(document.createTextNode(k));
-            li.appendChild(ul_nest);
-            for (c of v) {
-                let li_nest = document.createElement("li");
-                li_nest.appendChild(document.createTextNode(c.name + ":" + c.value.value));
-                ul_nest.appendChild(li_nest);
             }
         }
     },

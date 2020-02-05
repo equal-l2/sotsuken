@@ -1,4 +1,7 @@
 <!doctype html>
+<!--
+    vim:ft=vue
+-->
 <html>
     <head>
         <title>viewer</title>
@@ -6,25 +9,26 @@
         <link rel="stylesheet" href="style.css">
     </head>
     <body>
-        <div id="app">
-            <main>
-                <div id="src-view" style="flex:2">
-                    <ol v-if="trace!=null" id="src-cont">
-                        <li v-for="(l,idx) in trace.src" :class="{selected: idx==line}">{{ l }}</li>
-                    </ol>
-                </div>
-                <div id="var-view" style="flex:1">
-                    <ul id="var-cont">
-                    </ul>
-                </div>
-            </main>
+        <div id="app" style="font-family:monospace">
+            <form>
+                <input type="file" @change="readSrc">
+            </form>
             <button @click="step-=1" :disabled="step<=0">← prev</button>
             <span v-if="trace!=null"> {{step + 1}}/{{step_max}} </span>
             <span v-else> -/- </span>
             <button @click="step+=1" :disabled="step+1>=step_max">next →</button>
-            <form>
-                <input type="file" @change="readSrc">
-            </form>
+            <main>
+                <div style="flex:2">
+                    <ol v-if="trace!=null">
+                        <li v-for="(l, idx) in trace.src" :class="{selected: idx==line}">{{ l }}</li>
+                    </ol>
+                </div>
+                <div style="flex:1">
+                    <ul v-if="trace!=null">
+                    <var-list v-for="(v, k) in vars" :name="k" :value="v" :key="JSON.stringify(k)+':'+JSON.stringify(v)"></var-list>
+                    </ul>
+                </div>
+            </main>
         </div>
         <script src="https://cdn.jsdelivr.net/npm/vue/dist/vue.js"></script>
         <script src="main.js"></script>

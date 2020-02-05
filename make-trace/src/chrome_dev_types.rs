@@ -57,5 +57,5 @@ pub struct RemoteObject {
 #[derive(Clone, Deserialize, Serialize, Debug, PartialEq)]
 pub struct PropertyDescriptor {
     pub name: String,
-    pub value: Option<RemoteObject>,
+    pub value: RemoteObject,
 }

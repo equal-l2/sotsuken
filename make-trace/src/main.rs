@@ -1,32 +1,46 @@
 #[macro_use]
 extern crate lazy_static;
 
-use serde::Deserialize;
 use serde::Serialize;
 
 mod chrome_dev_types;
 use chrome_dev_types::*;
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum MsgType {
+#[derive(Clone, Debug)]
+enum MsgType {
     Response(Response),
     PauseEvent(Event),
     OtherEvent(Event),
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Serialize, Debug)]
 struct Step {
     loc: Location,
-    vars: std::collections::BTreeMap<String, Vec<PropertyDescriptor>>,
+    vars: std::collections::BTreeMap<String, Vec<Variable>>,
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Serialize, Debug)]
 struct Trace {
     src: Vec<String>,
     steps: Vec<Step>,
 }
 
+#[derive(Clone, Serialize, Debug)]
+#[serde(untagged)]
+enum ValueType {
+    Value(String),
+    Nested(Vec<Variable>),
+}
+
+#[derive(Clone, Serialize, Debug)]
+struct Variable {
+    name: String,
+    value: ValueType,
+}
+
 lazy_static! {
+    // This should be Mutex instead of AtomicUsize,
+    // since send_msg should lock this while sending a message.
     static ref MSG_ID: std::sync::Mutex<usize> = std::sync::Mutex::new(0);
 }
 
@@ -53,11 +67,9 @@ fn wait_msg(wsclient: &mut Client) -> Option<MsgType> {
         if let OwnedMessage::Text(i) = resp {
             let v = serde_json::from_str::<Response>(&i);
             if let Ok(e) = v {
-                //println!("Resp: {}", i);
                 println!("Response #{}", e.id);
                 return Some(MsgType::Response(e));
             } else if let Ok(e) = serde_json::from_str::<Event>(&i) {
-                //println!("Event: {}", i);
                 println!("Event {}", e.method);
                 if e.method == "Debugger.paused" {
                     return Some(MsgType::PauseEvent(e));
@@ -132,10 +144,48 @@ fn runtime_get_properties(id: String, mut c: &mut Client) -> Option<Vec<Property
     );
     match wait_msg(&mut c) {
         Some(MsgType::Response(e)) => Some(
-            serde_json::from_value(e.result["result"].clone())
-                .expect("result should be PropertyDescriptor in this context"),
+            e.result["result"]
+                .as_array()
+                .expect("This must be an array as per the spec")
+                .into_iter()
+                .filter_map(|v| serde_json::from_value(v.clone()).ok())
+                .collect(),
         ),
         _ => None,
+    }
+}
+
+fn resolve_property_descriptor(
+    p: PropertyDescriptor,
+    pred: fn(&PropertyDescriptor) -> bool,
+    mut c: &mut Client,
+) -> Variable {
+    println!("Resolving {:?}", p);
+    let resolve = pred(&p);
+    let robj = p.value;
+    Variable {
+        name: p.name,
+        value: match robj.value {
+            Some(v) => ValueType::Value(String::from(v.as_str().unwrap())),
+            _ => {
+                if resolve {
+                    ValueType::Nested(
+                        runtime_get_properties(
+                            robj.object_id.expect(
+                                "RemoteObject should have an objectId unless it has an value",
+                            ),
+                            &mut c,
+                        )
+                        .expect("Runtime.getProperties failed")
+                        .into_iter()
+                        .map(|pd| resolve_property_descriptor(pd, pred, &mut c))
+                        .collect(),
+                    )
+                } else {
+                    ValueType::Value(String::from("unresolved"))
+                }
+            }
+        },
     }
 }
 
@@ -213,7 +263,6 @@ fn main() {
                 loc,
                 vars: Default::default(),
             };
-            //println!("cf size: {}", cfs.len());
             for cf in cfs {
                 for sc in cf.scope_chain {
                     if let Some(ref i) = sc.name {
@@ -223,16 +272,23 @@ fn main() {
                         }
                     }
                     let var_array = runtime_get_properties(sc.object.object_id.unwrap(), &mut c);
+                    let should_resolve = |pd: &PropertyDescriptor| {
+                        pd.value.r#type != "function" && !pd.name.starts_with("__")
+                    };
                     if let Some(vs) = var_array {
                         //FIXME: wait until __main__ appears (to exclude function
                         // definitions)
                         step.vars.entry(sc.name.unwrap()).or_insert_with(|| {
                             vs.into_iter()
-                                .filter(|pd| {
-                                    if let Some(ref i) = pd.value {
-                                        i.r#type != "function" && !pd.name.starts_with("__")
+                                .filter_map(|pd| {
+                                    if should_resolve(&pd) {
+                                        Some(resolve_property_descriptor(
+                                            pd,
+                                            should_resolve,
+                                            &mut c,
+                                        ))
                                     } else {
-                                        false
+                                        None
                                     }
                                 })
                                 .collect::<Vec<_>>()
