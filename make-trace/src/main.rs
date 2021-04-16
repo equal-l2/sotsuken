@@ -1,7 +1,6 @@
-#[macro_use]
-extern crate lazy_static;
-
+use once_cell::sync::Lazy;
 use serde::Serialize;
+use std::sync::Mutex;
 
 mod chrome_dev_types;
 use chrome_dev_types::*;
@@ -38,14 +37,13 @@ struct Variable {
     value: ValueType,
 }
 
-lazy_static! {
-    // This should be Mutex instead of AtomicUsize,
-    // since send_msg should lock this while sending a message.
-    static ref MSG_ID: std::sync::Mutex<usize> = std::sync::Mutex::new(0);
-}
+// Mutex must be used instead of AtomicUsize,
+// because send_msg should lock this while sending a message.
+static MSG_ID: Lazy<Mutex<usize>> = Lazy::new(|| Mutex::new(0));
 
 type Client = websocket::client::sync::Client<std::net::TcpStream>;
 
+// Send text through websocket
 fn send_msg(msg: &str, wsclient: &mut Client) {
     let mut id = MSG_ID.lock().unwrap();
     let msg = format!(r#"{{"id": {}, {}}}"#, *id, msg);
@@ -56,6 +54,7 @@ fn send_msg(msg: &str, wsclient: &mut Client) {
     println!("Sent : {}", msg);
 }
 
+// Block until a message comes in and process it
 fn wait_msg(wsclient: &mut Client) -> Option<MsgType> {
     use websocket::OwnedMessage;
     loop {
@@ -84,6 +83,7 @@ fn wait_msg(wsclient: &mut Client) -> Option<MsgType> {
     }
 }
 
+// Prepare remote debugger
 fn init_debugger(mut c: &mut Client) {
     let init_msgs = [
         r#""method":"Runtime.enable""#,
@@ -101,6 +101,7 @@ fn init_debugger(mut c: &mut Client) {
     }
 }
 
+// Add breakpoints to all lines of source code
 fn set_breakpoint_all(lines: usize, filename: &str, mut c: &mut Client) {
     for i in 0..lines {
         send_msg(
@@ -118,6 +119,7 @@ fn set_breakpoint_all(lines: usize, filename: &str, mut c: &mut Client) {
     }
 }
 
+// step until it exits from library code
 fn jump_to_file(filename: &str, mut c: &mut Client) -> Event {
     loop {
         let evn;
@@ -134,6 +136,7 @@ fn jump_to_file(filename: &str, mut c: &mut Client) -> Event {
     }
 }
 
+// get properties of the object specified by the id
 fn runtime_get_properties(id: String, mut c: &mut Client) -> Option<Vec<PropertyDescriptor>> {
     send_msg(
         &format!(
